@@ -1,0 +1,105 @@
+name: Build OpenWrt 25.12.5 Mi Router 3G v1 SPI
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Jakarta
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout Your Repository
+      uses: actions/checkout@v4
+
+    - name: Set Timezone to WIB
+      run: |
+        sudo timedatectl set-timezone "Asia/Jakarta"
+        echo "BUILD_DATE=$(date +'%Y%m%d-%H%M')" >> $GITHUB_ENV
+
+    - name: Free Disk Space & Install Dependencies
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo docker rmi $(docker image ls -q) 2>/dev/null || true
+        sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -y purge azure-cli google-cloud-cli google-chrome-stable firefox powershell dotnet-sdk*
+        sudo -E apt-get update
+        sudo -E apt-get -y install build-essential clang flex bison g++ gawk \
+        gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+        python3-setuptools rsync swig unzip zlib1g-dev file wget
+        sudo -E apt-get autoremove --purge -y
+        sudo -E apt-get clean
+
+    - name: Clone OpenWrt Source & Checkout Tag
+      run: |
+        git clone https://github.com/openwrt/openwrt.git
+        cd openwrt
+        git pull
+        git checkout v25.12.5
+
+    - name: Cache OpenWrt DL and Staging Dir
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/dl
+          openwrt/staging_dir
+        # Cache dikunci berdasarkan versi tag OpenWrt. 
+        # Jika Anda mengubah isi file .config Anda, cache akan tetap dipakai (restore), namun jika ada update fungsionalitas, cache akan diperbarui otomatis saat build selesai.
+        key: ${{ runner.os }}-openwrt-25.12.5-${{ hashFiles('**/config', '**/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-25.12.5-
+
+    - name: Update and Install Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Apply Hardmod Fixes (Overwrite DTS & MK)
+      run: |
+        if [ -f "patch-custom/mt7621_xiaomi_mi-router-3g.dts" ]; then
+          cp -f patch-custom/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/
+          echo "DTS Xiaomi 3G SPI successfully replaced!"
+        else
+          find patch-custom/ -name "*.dts" -exec cp -f {} openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts \;
+          echo "DTS files automatically applied to Mi Router 3G!"
+        fi
+        
+        if [ -f "patch-custom/mt7621.mk" ]; then
+          cp -f patch-custom/mt7621.mk openwrt/target/linux/ramips/image/
+          echo "Makefile (mt7621.mk) successfully replaced!"
+        fi
+
+    - name: Generate Config for Mi Router 3G
+      run: |
+        cd openwrt
+        if [ -f "../.config" ]; then
+          cp -f ../.config .config
+          echo "Berhasil menyalin .config kustom!"
+        else
+          echo "CONFIG_TARGET_ramips=y" > .config
+          echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+          echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y" >> .config
+        fi
+        
+        make defconfig
+        
+    - name: Download Package Source (Pre-download)
+      run: |
+        cd openwrt
+        make download -j$(nproc)
+        find dl -size 0 -exec rm -f {} \;
+
+    - name: Compile Toolchain & Firmware (World)
+      run: |
+        cd openwrt
+        make -j$(nproc) world || make -j1 V=s world
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt_25.12.5_Mi_Router_3G_v1_SPI_${{ env.BUILD_DATE }}
+        path: openwrt/bin
