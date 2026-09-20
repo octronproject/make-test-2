@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12.5 Mi Router 3G v1 SPI
+name: Build OpenWrt 25.12.5 ZTE E8820V2
 
 on:
   workflow_dispatch:
@@ -58,22 +58,33 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Apply Hardmod Fixes (Overwrite DTS & MK)
+    - name: Apply Files Fixes (dts,mk,leds,network)
       run: |
-        if [ -f "patch-custom/mt7621_xiaomi_mi-router-3g.dts" ]; then
-          cp -f patch-custom/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/
-          echo "DTS Xiaomi 3G SPI successfully replaced!"
+        set -e
+        if [ -f "zte-e8820v2/mt7621_zte_e8820v2.dts" ]; then
+          cp -f zte-e8820v2/mt7621_zte_e8820v2.dts openwrt/target/linux/ramips/dts/
+          echo "DTS successfully replaced!"
         else
-          find patch-custom/ -name "*.dts" -exec cp -f {} openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts \;
-          echo "DTS files automatically applied to Mi Router 3G!"
+          find zte-e8820v2/ -name "*.dts" -exec cp -f {} openwrt/target/linux/ramips/dts/mt7621_zte_e8820v2.dts \;
+          echo "DTS files automatically applied!"
         fi
         
-        if [ -f "patch-custom/mt7621.mk" ]; then
-          cp -f patch-custom/mt7621.mk openwrt/target/linux/ramips/image/
+        if [ -f "zte-e8820v2/mt7621.mk" ]; then
+          cp -f zte-e8820v2/mt7621.mk openwrt/target/linux/ramips/image/
           echo "Makefile (mt7621.mk) successfully replaced!"
         fi
 
-    - name: Generate Config for Mi Router 3G
+        if [ -f "zte-e8820v2/01_leds" ]; then
+          cp -f zte-e8820v2/01_leds openwrt/target/linux/ramips/mt7621/base-files/etc/board.d/
+          echo "Makefile (01_leds) successfully replaced!"
+        fi
+
+        if [ -f "zte-e8820v2/02_network" ]; then
+          cp -f zte-e8820v2/02_network openwrt/target/linux/ramips/mt7621/base-files/etc/board.d/
+          echo "Makefile (02_network) successfully replaced!"
+        fi
+
+    - name: Generate File Config
       run: |
         cd openwrt
         if [ -f "../.config" ]; then
@@ -82,7 +93,7 @@ jobs:
         else
           echo "CONFIG_TARGET_ramips=y" > .config
           echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
-          echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y" >> .config
+          echo "CONFIG_TARGET_ramips_mt7621_DEVICE_zte_e8820v2=y" >> .config
         fi
         
         make defconfig
@@ -101,5 +112,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt_25.12.5_Mi_Router_3G_v1_SPI_${{ env.BUILD_DATE }}
+        name: OpenWrt_25.12.5_zte_e8820v2_${{ env.BUILD_DATE }}
         path: openwrt/bin
