@@ -1,0 +1,88 @@
+name: Build OpenWrt 21.02.7 Xiaomi Mi Router 3G V1
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Jakarta
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout Your Repository
+      uses: actions/checkout@v4
+
+    - name: Set Timezone to WIB
+      run: |
+        sudo timedatectl set-timezone "Asia/Jakarta"
+        echo "BUILD_DATE=$(date +'%Y%m%d-%H%M')" >> $GITHUB_ENV
+
+    - name: Free Disk Space & Install Dependencies
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo docker rmi $(docker image ls -q) 2>/dev/null || true
+        sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -y purge azure-cli google-cloud-cli google-chrome-stable firefox powershell dotnet-sdk*
+        sudo -E apt-get update
+        sudo -E apt-get -y install build-essential clang flex bison g++ gawk \
+        gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+        python3-setuptools rsync swig unzip zlib1g-dev file wget
+        sudo -E apt-get autoremove --purge -y
+        sudo -E apt-get clean
+
+    - name: Clone OpenWrt Source & Checkout Tag
+      run: |
+        git clone https://github.com/openwrt/openwrt.git
+        cd openwrt
+        git pull
+        git checkout v21.02.7
+
+    - name: Update and Install Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Apply Files Fixes (dts,mk)
+      run: |
+        set -e
+        if [ -f "xiaomi-mi_r3g_v1/mt7621_xiaomi_mi-router-3g.dts" ]; then
+          cp -f xiaomi-mi_r3g_v1/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/
+          echo "DTS successfully replaced!"
+        fi
+        
+        if [ -f "xiaomi-mi_r3g_v1/mt7621.mk" ]; then
+          cp -f xiaomi-mi_r3g_v1/mt7621.mk openwrt/target/linux/ramips/image/
+          echo "Makefile (mt7621.mk) successfully replaced!"
+        fi
+
+    - name: Generate File Config
+      run: |
+        cd openwrt
+        set -e
+        if [ -f "xiaomi-mi_r3g_v1/.config" ]; then
+        cp -f xiaomi-mi_r3g_v1/.config .config
+        echo "Berhasil menyalin .config kustom!"
+        fi
+        
+        make defconfig
+        
+    - name: Download Package Source (Pre-download)
+      run: |
+        cd openwrt
+        make download -j$(nproc)
+        find dl -size 0 -exec rm -f {} \;
+
+    - name: Compile Toolchain & Firmware (World)
+      run: |
+        cd openwrt
+        make -j$(nproc) world || make -j1 V=s world
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt_21.02.7_xiaomi-mi_r3g_v1_${{ env.BUILD_DATE }}
+        path: openwrt/bin
