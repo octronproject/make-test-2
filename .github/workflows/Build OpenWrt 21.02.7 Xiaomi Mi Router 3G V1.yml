@@ -49,25 +49,10 @@ jobs:
     - name: Apply Files Fixes (dts,mk)
       run: |
         set -e
-        if [ -f "xiaomi-mi_r3g_v1/mt7621_xiaomi_mi-router-3g.dts" ]; then
-          cp -f xiaomi-mi_r3g_v1/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/
-          echo "DTS successfully replaced!"
-        fi
-        
-        if [ -f "xiaomi-mi_r3g_v1/mt7621.mk" ]; then
-          cp -f xiaomi-mi_r3g_v1/mt7621.mk openwrt/target/linux/ramips/image/
-          echo "Makefile (mt7621.mk) successfully replaced!"
-        fi
-
-    - name: Generate File Config
-      run: |
+        cp xiaomi-mi_r3g_v1/.config openwrt/.config
+        cp xiaomi-mi_r3g_v1/mt7621.mk openwrt/target/linux/ramips/image/mt7621.mk
+        cp xiaomi-mi_r3g_v1/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
         cd openwrt
-        set -e
-        if [ -f "xiaomi-mi_r3g_v1/.config" ]; then
-        cp -f xiaomi-mi_r3g_v1/.config .config
-        echo "Berhasil menyalin .config kustom!"
-        fi
-        
         make defconfig
         
     - name: Download Package Source (Pre-download)
