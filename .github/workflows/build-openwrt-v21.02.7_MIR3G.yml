@@ -62,7 +62,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Apply custom files (Overwrite Config, DTS, MK, LED & Network)
+    - name: Apply custom files (Overwrite Config, DTS, MK)
       run: |
         set -e
         cp custom/.config openwrt/.config
