@@ -1,4 +1,4 @@
-name: Build OpenWrt v21.02.7 ZTE MIR3G
+name: Build OpenWrt v21.02.7 MIR3G
 
 on:
   workflow_dispatch:
