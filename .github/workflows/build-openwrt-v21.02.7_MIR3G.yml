@@ -67,7 +67,7 @@ jobs:
         set -e
         cp custom/.config openwrt/.config
         cp custom/mt7621.mk openwrt/target/linux/ramips/image/mt7621.mk
-        cp custom/mt7621_xiaomi_mi-router-3g-v1.dts openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g-v1.dts
+        cp custom/mt7621_xiaomi_mi-router-3g.dts openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
         
         cd openwrt
         make defconfig
