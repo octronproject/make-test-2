@@ -42,19 +42,6 @@ jobs:
         git clone https://github.com/x-wrt/x-wrt.git
         cd x-wrt
         git pull
-        git checkout v26.10_b202609302026
-        git branch
-
-    - name: Cache dl and build_dir
-      uses: actions/cache@v4
-      with:
-        path: |
-          x-wrt/dl
-          x-wrt/staging_dir
-        
-        key: ${{ runner.os }}-x-wrt-26.10-${{ hashFiles('**/config', '**/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-x-wrt-26.10-
 
     - name: Update feeds
       run: |
