@@ -43,6 +43,7 @@ jobs:
         cd x-wrt
         git pull
         git switch v26.10
+        git branch
         git checkout v26.10
 
     - name: Cache dl and build_dir
