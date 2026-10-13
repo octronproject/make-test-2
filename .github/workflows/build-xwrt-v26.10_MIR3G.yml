@@ -66,7 +66,7 @@ jobs:
 
     - name: Compile Toolchain & Firmware (World)
       run: |
-        cd openwrt
+        cd x-wrt
         make -j$(nproc) world || make -j1 V=s world
 
     - name: Upload Artifact
