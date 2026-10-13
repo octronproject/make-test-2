@@ -64,18 +64,10 @@ jobs:
         make download -j$(nproc)
         find dl -size 0 -exec rm -f {} \;
 
-    - name: Build firmware
+    - name: Compile Toolchain & Firmware (World)
       run: |
-        cd x-wrt
-        JOBS=$(nproc || echo 2)
-        echo "Using $JOBS parallel jobs"
-        export CCACHE_DIR="$HOME/.ccache"
-        mkdir -p "$CCACHE_DIR"
-        echo "Clearing old ccache..."
-        ccache -C || true
-        ccache -M 2G || true
-        time make -j"$JOBS" world || make -j1 V=s world
-        echo "✓ Build finished"
+        cd openwrt
+        make -j$(nproc) world || make -j1 V=s world
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
