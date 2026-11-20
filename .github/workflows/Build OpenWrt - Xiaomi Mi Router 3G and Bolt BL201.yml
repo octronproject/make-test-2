@@ -128,7 +128,7 @@ jobs:
 
           # Keep the upstream board scripts intact and add only BL201-specific
           # board setup. In 21.02 these scripts live in ramips/base-files.
-          board_dir = Path("openwrt/target/linux/ramips/base-files/etc/board.d")
+          board_dir = Path("openwrt/target/linux/ramips/mt7620/base-files/etc/board.d")
           for filename, case_line in (
               ("01_leds", '\tbolt-bl201)\n\t\tucidef_set_led_default "power" "POWER" "bolt-bl201:blue:power" "1"\n\t\t;;\n'),
               ("02_network", '\tbolt-bl201)\n\t\tucidef_add_switch "switch0" \\\n\t\t\t"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"\n\t\t;;\n'),
