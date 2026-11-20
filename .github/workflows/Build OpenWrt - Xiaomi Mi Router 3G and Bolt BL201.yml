@@ -1,0 +1,169 @@
+name: Build OpenWrt - Xiaomi Mi Router 3G and Bolt BL201
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_matrix:
+        description: 'JSON build list; each entry selects one device and OpenWrt tag'
+        required: true
+        default: '{"include":[{"device":"xiaomi-mir3g","version":"v25.12.6"},{"device":"bolt-bl201","version":"v25.12.6"}]}'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - 'xiaomi-mir3g/**'
+      - 'bolt-bl201/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.device }} / OpenWrt ${{ matrix.version }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(inputs.build_matrix || '{"include":[{"device":"xiaomi-mir3g","version":"v25.12.6"},{"device":"bolt-bl201","version":"v25.12.6"}]}').include }}
+
+    steps:
+      - name: Checkout custom files
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-setuptools rsync \
+            swig unzip zlib1g-dev file wget
+
+      - name: Clone selected OpenWrt tag
+        env:
+          OPENWRT_VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          git clone --branch "$OPENWRT_VERSION" --depth 1 \
+            https://github.com/openwrt/openwrt.git openwrt
+          test "$(git -C openwrt describe --tags --exact-match)" = "$OPENWRT_VERSION"
+
+      - name: Apply Xiaomi Mi Router 3G files
+        if: matrix.device == 'xiaomi-mir3g'
+        run: |
+          set -euo pipefail
+          test -s xiaomi-mir3g/.config
+          test -s xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts
+          test -s xiaomi-mir3g/mt7621.mk
+          cp xiaomi-mir3g/.config openwrt/.config
+          cp xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts \
+            openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
+          cp xiaomi-mir3g/mt7621.mk openwrt/target/linux/ramips/image/mt7621.mk
+
+      - name: Apply Bolt BL201 profile and board files
+        if: matrix.device == 'bolt-bl201'
+        run: |
+          set -euo pipefail
+          test -s bolt-bl201/.config
+          test -s bolt-bl201/BOLT-BL201.dts
+          test -s bolt-bl201/mt7620.mk
+          test -s bolt-bl201/01_leds
+          test -s bolt-bl201/02_network
+
+          cp bolt-bl201/.config openwrt/.config
+          # Match OpenWrt's SOC_DEVICE DTS naming convention for Device/bolt_bl201.
+          cp bolt-bl201/BOLT-BL201.dts \
+            openwrt/target/linux/ramips/dts/mt7620a_bolt_bl201.dts
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          image_mk = Path("openwrt/target/linux/ramips/image/mt7620.mk")
+          text = image_mk.read_text()
+          profile = """# Custom Bolt BL201 profile
+          define Device/bolt_bl201
+            SOC := mt7620a
+            DEVICE_DTS := mt7620a_bolt_bl201
+            IMAGE_SIZE := 15872k
+            DEVICE_VENDOR := Bolt
+            DEVICE_MODEL := BL201
+            DEVICE_PACKAGES := kmod-mt76x2 kmod-usb2 kmod-usb-ohci
+          endef
+          TARGET_DEVICES += bolt_bl201"""
+          pattern = re.compile(
+              r"^define Device/bolt_bl201\n.*?^TARGET_DEVICES \+= bolt_bl201$",
+              re.MULTILINE | re.DOTALL,
+          )
+          if pattern.search(text):
+              text = pattern.sub(profile, text, count=1)
+          else:
+              text = text.rstrip() + "\n\n" + profile + "\n"
+          image_mk.write_text(text)
+
+          # Preserve the upstream board scripts and merge only the Bolt cases;
+          # the repository files are complete legacy scripts, not safe replacements
+          # for the newer OpenWrt board scripts.
+          leds = Path("openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/01_leds")
+          led_text = leds.read_text()
+          if not re.search(r"bolt[-,]bl201", led_text):
+              led_case = '''\tbolt-bl201|bolt,bl201)
+          \t\tucidef_set_led_default "power" "POWER" "bolt-bl201:blue:power" "1"
+          \t\t;;
+          '''
+              led_text = re.sub(r"\nesac\s*$", "\n" + led_case + "esac\n", led_text)
+              leds.write_text(led_text)
+
+          network = Path("openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/02_network")
+          network_text = network.read_text()
+          if not re.search(r"bolt[-,]bl201", network_text):
+              network_case = '''\tbolt-bl201|bolt,bl201)
+          \t\tucidef_add_switch "switch0" \\
+          \t\t\t"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"
+          \t\t;;
+          '''
+              network_text = re.sub(r"\nesac\s*$", "\n" + network_case + "esac\n", network_text)
+              network.write_text(network_text)
+          PY
+
+          grep -q '^define Device/bolt_bl201$' openwrt/target/linux/ramips/image/mt7620.mk
+          grep -q 'bolt-bl201' openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/01_leds
+          grep -q 'bolt-bl201' openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/02_network
+
+      - name: Update feeds
+        working-directory: openwrt
+        run: ./scripts/feeds update -a
+
+      - name: Install feeds
+        working-directory: openwrt
+        run: ./scripts/feeds install -a
+
+      - name: Resolve build config while preserving the prepared config file
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          # Keep the user's input outside the OpenWrt tree. make defconfig may
+          # normalize openwrt/.config, but cannot modify the prepared repo file.
+          cp .config "$RUNNER_TEMP/custom-openwrt.config"
+          sha256sum "$RUNNER_TEMP/custom-openwrt.config" > "$RUNNER_TEMP/custom-openwrt.config.sha256"
+          make defconfig
+          sha256sum --check "$RUNNER_TEMP/custom-openwrt.config.sha256"
+
+      - name: Download sources
+        working-directory: openwrt
+        run: make download -j"$(nproc)"
+
+      - name: Build firmware
+        working-directory: openwrt
+        run: make -j"$(nproc)" V=s
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.version }}-${{ matrix.device }}
+          path: openwrt/bin/targets/**
+          if-no-files-found: error
+          retention-days: 14
