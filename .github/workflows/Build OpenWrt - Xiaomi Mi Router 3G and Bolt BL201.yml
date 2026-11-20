@@ -1,18 +1,12 @@
-name: Build OpenWrt - Xiaomi Mi Router 3G and Bolt BL201
+name: Build OpenWrt - Xiaomi Mi Router 3G & Bolt BL201
 
 on:
   workflow_dispatch:
-    inputs:
-      build_matrix:
-        description: 'JSON build list; each entry selects one device and OpenWrt tag'
-        required: true
-        default: '{"include":[{"device":"xiaomi-mir3g","version":"v25.12.6"},{"device":"bolt-bl201","version":"v25.12.6"}]}'
-        type: string
   push:
     branches:
       - main
     paths:
-      - '.github/workflows/**'
+      - '.github/workflows/Build OpenWrt v25.12.6 (Xiaomi Mi Router 3G).yml'
       - 'xiaomi-mir3g/**'
       - 'bolt-bl201/**'
 
@@ -28,7 +22,11 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        include: ${{ fromJSON(inputs.build_matrix || '{"include":[{"device":"xiaomi-mir3g","version":"v25.12.6"},{"device":"bolt-bl201","version":"v25.12.6"}]}').include }}
+        include:
+          - device: xiaomi-mir3g
+            version: v25.12.6
+          - device: bolt-bl201
+            version: v21.02.7
 
     steps:
       - name: Checkout custom files
@@ -42,7 +40,7 @@ jobs:
             gettext git libncurses-dev libssl-dev python3-setuptools rsync \
             swig unzip zlib1g-dev file wget
 
-      - name: Clone selected OpenWrt tag
+      - name: Clone selected OpenWrt version
         env:
           OPENWRT_VERSION: ${{ matrix.version }}
         run: |
@@ -51,19 +49,45 @@ jobs:
             https://github.com/openwrt/openwrt.git openwrt
           test "$(git -C openwrt describe --tags --exact-match)" = "$OPENWRT_VERSION"
 
-      - name: Apply Xiaomi Mi Router 3G files
+      - name: Apply Xiaomi Mi Router 3G custom files
         if: matrix.device == 'xiaomi-mir3g'
         run: |
           set -euo pipefail
           test -s xiaomi-mir3g/.config
           test -s xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts
           test -s xiaomi-mir3g/mt7621.mk
+
           cp xiaomi-mir3g/.config openwrt/.config
           cp xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts \
             openwrt/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
-          cp xiaomi-mir3g/mt7621.mk openwrt/target/linux/ramips/image/mt7621.mk
 
-      - name: Apply Bolt BL201 profile and board files
+          # Merge only the custom device definition; do not replace the full
+          # upstream mt7621.mk, which contains profiles for many other devices.
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path("xiaomi-mir3g/mt7621.mk").read_text()
+          destination = Path("openwrt/target/linux/ramips/image/mt7621.mk")
+          text = destination.read_text()
+          device = "xiaomi_mi-router-3g"
+          pattern = re.compile(
+              rf"^define Device/{re.escape(device)}\n.*?"
+              rf"^endef\nTARGET_DEVICES \+= {re.escape(device)}$",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(source)
+          if not match:
+              raise SystemExit(f"Custom profile {device} not found in mt7621.mk")
+          custom_profile = match.group(0)
+          if pattern.search(text):
+              text = pattern.sub(lambda _: custom_profile, text, count=1)
+          else:
+              text = text.rstrip() + "\n\n" + custom_profile + "\n"
+          destination.write_text(text)
+          PY
+
+      - name: Apply Bolt BL201 custom files (OpenWrt 21.02)
         if: matrix.device == 'bolt-bl201'
         run: |
           set -euo pipefail
@@ -74,64 +98,49 @@ jobs:
           test -s bolt-bl201/02_network
 
           cp bolt-bl201/.config openwrt/.config
-          # Match OpenWrt's SOC_DEVICE DTS naming convention for Device/bolt_bl201.
           cp bolt-bl201/BOLT-BL201.dts \
-            openwrt/target/linux/ramips/dts/mt7620a_bolt_bl201.dts
+            openwrt/target/linux/ramips/dts/BOLT-BL201.dts
 
+          # Merge the one Bolt profile into the existing image file, preserving
+          # all upstream device profiles and image definitions.
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          image_mk = Path("openwrt/target/linux/ramips/image/mt7620.mk")
-          text = image_mk.read_text()
-          profile = """# Custom Bolt BL201 profile
-          define Device/bolt_bl201
-            SOC := mt7620a
-            DEVICE_DTS := mt7620a_bolt_bl201
-            IMAGE_SIZE := 15872k
-            DEVICE_VENDOR := Bolt
-            DEVICE_MODEL := BL201
-            DEVICE_PACKAGES := kmod-mt76x2 kmod-usb2 kmod-usb-ohci
-          endef
-          TARGET_DEVICES += bolt_bl201"""
+          source = Path("bolt-bl201/mt7620.mk").read_text()
+          destination = Path("openwrt/target/linux/ramips/image/mt7620.mk")
+          text = destination.read_text()
+          device = "bolt-bl201"
           pattern = re.compile(
-              r"^define Device/bolt_bl201\n.*?^TARGET_DEVICES \+= bolt_bl201$",
+              rf"^define Device/{re.escape(device)}\n.*?"
+              rf"^endef\nTARGET_DEVICES \+= {re.escape(device)}$",
               re.MULTILINE | re.DOTALL,
           )
+          match = pattern.search(source)
+          if not match:
+              raise SystemExit(f"Custom profile {device} not found in mt7620.mk")
+          custom_profile = match.group(0)
           if pattern.search(text):
-              text = pattern.sub(profile, text, count=1)
+              text = pattern.sub(lambda _: custom_profile, text, count=1)
           else:
-              text = text.rstrip() + "\n\n" + profile + "\n"
-          image_mk.write_text(text)
+              text = text.rstrip() + "\n\n" + custom_profile + "\n"
+          destination.write_text(text)
 
-          # Preserve the upstream board scripts and merge only the Bolt cases;
-          # the repository files are complete legacy scripts, not safe replacements
-          # for the newer OpenWrt board scripts.
-          leds = Path("openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/01_leds")
-          led_text = leds.read_text()
-          if not re.search(r"bolt[-,]bl201", led_text):
-              led_case = '''\tbolt-bl201|bolt,bl201)
-          \t\tucidef_set_led_default "power" "POWER" "bolt-bl201:blue:power" "1"
-          \t\t;;
-          '''
-              led_text = re.sub(r"\nesac\s*$", "\n" + led_case + "esac\n", led_text)
-              leds.write_text(led_text)
-
-          network = Path("openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/02_network")
-          network_text = network.read_text()
-          if not re.search(r"bolt[-,]bl201", network_text):
-              network_case = '''\tbolt-bl201|bolt,bl201)
-          \t\tucidef_add_switch "switch0" \\
-          \t\t\t"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"
-          \t\t;;
-          '''
-              network_text = re.sub(r"\nesac\s*$", "\n" + network_case + "esac\n", network_text)
-              network.write_text(network_text)
+          # Keep the upstream board scripts intact and add only BL201-specific
+          # board setup. In 21.02 these scripts live in ramips/base-files.
+          board_dir = Path("openwrt/target/linux/ramips/base-files/etc/board.d")
+          for filename, case_line in (
+              ("01_leds", '\tbolt-bl201)\n\t\tucidef_set_led_default "power" "POWER" "bolt-bl201:blue:power" "1"\n\t\t;;\n'),
+              ("02_network", '\tbolt-bl201)\n\t\tucidef_add_switch "switch0" \\\n\t\t\t"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"\n\t\t;;\n'),
+          ):
+              path = board_dir / filename
+              board_text = path.read_text()
+              if "bolt-bl201)" not in board_text:
+                  if not re.search(r"\nesac\s*$", board_text):
+                      raise SystemExit(f"Cannot find final esac in {path}")
+                  board_text = re.sub(r"\nesac\s*$", "\n" + case_line + "esac\n", board_text)
+                  path.write_text(board_text)
           PY
-
-          grep -q '^define Device/bolt_bl201$' openwrt/target/linux/ramips/image/mt7620.mk
-          grep -q 'bolt-bl201' openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/01_leds
-          grep -q 'bolt-bl201' openwrt/target/linux/ramips/mt7620/base-files/etc/board.d/02_network
 
       - name: Update feeds
         working-directory: openwrt
@@ -141,16 +150,19 @@ jobs:
         working-directory: openwrt
         run: ./scripts/feeds install -a
 
-      - name: Resolve build config while preserving the prepared config file
+      - name: Resolve OpenWrt configuration
         working-directory: openwrt
         run: |
           set -euo pipefail
-          # Keep the user's input outside the OpenWrt tree. make defconfig may
-          # normalize openwrt/.config, but cannot modify the prepared repo file.
-          cp .config "$RUNNER_TEMP/custom-openwrt.config"
-          sha256sum "$RUNNER_TEMP/custom-openwrt.config" > "$RUNNER_TEMP/custom-openwrt.config.sha256"
+          # defconfig can normalize the working copy openwrt/.config. The checked-out
+          # custom config under xiaomi-mir3g/ or bolt-bl201/ is never modified.
           make defconfig
-          sha256sum --check "$RUNNER_TEMP/custom-openwrt.config.sha256"
+          grep -q '^CONFIG_TARGET_ramips=y' .config
+          if [ "${{ matrix.device }}" = "xiaomi-mir3g" ]; then
+            grep -q '^CONFIG_TARGET_ramips_mt7621=y' .config
+          else
+            grep -q '^CONFIG_TARGET_ramips_mt7620=y' .config
+          fi
 
       - name: Download sources
         working-directory: openwrt
