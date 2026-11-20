@@ -133,6 +133,14 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Configure target
+        working-directory: lede
+        run: |
+          make defconfig
+          grep -E \
+            'CONFIG_TARGET_ramips|CONFIG_TARGET_DEVICE_ramips_mt7621|CONFIG_TARGET_ROOTFS' \
+            .config || true
+
       - name: Repair host tools
         working-directory: lede
         run: |
@@ -148,14 +156,6 @@ jobs:
           test -x staging_dir/host/bin/flex
           staging_dir/host/bin/m4 --version
           staging_dir/host/bin/flex --version
-
-      - name: Configure target
-        working-directory: lede
-        run: |
-          make defconfig
-          grep -E \
-            'CONFIG_TARGET_ramips|CONFIG_TARGET_DEVICE_ramips_mt7621|CONFIG_TARGET_ROOTFS' \
-            .config || true
 
       - name: Compile Linux target
         working-directory: lede
