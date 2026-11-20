@@ -11,9 +11,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: lede-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   LEDE_REPO: https://github.com/coolsnowwolf/lede.git
-  LEDE_BRANCH: master
+  LEDE_REF: master
   LEDE_DIR: lede
   DTS_NAME: mt7621_xiaomi_mi-router-3g.dts
 
@@ -24,11 +28,12 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repository custom
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
+        continue-on-error: true
         with:
           tool-cache: true
           android: true
@@ -40,48 +45,53 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          set -e
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git \
-            libncurses-dev libssl-dev m4 pkg-config \
-            python3 python3-setuptools python3-pyelftools \
+            libncurses-dev libssl-dev libgnutls28-dev libelf-dev \
+            m4 pkg-config python3 python3-setuptools python3-pyelftools \
             rsync swig unzip zlib1g-dev file wget curl ccache
 
-      - name: Clone LEDE
+      - name: Clone pinned LEDE source
         run: |
-          git clone --depth=1 --branch "${LEDE_BRANCH}" \
+          set -euo pipefail
+          git clone --filter=blob:none --no-tags --branch "${LEDE_REF}" \
             "${LEDE_REPO}" "${LEDE_DIR}"
+          cd "${LEDE_DIR}"
+          git rev-parse --short=12 HEAD
 
       - name: Validate custom files
         run: |
+          set -euo pipefail
           test -f custom/.config
           test -f "custom/${DTS_NAME}"
           grep -q '#include "mt7621.dtsi"' "custom/${DTS_NAME}"
           grep -q 'jedec,spi-nor' "custom/${DTS_NAME}"
           grep -q '&spi0' "custom/${DTS_NAME}"
+          grep -q '&gsw' "custom/${DTS_NAME}"
 
-          if grep -q 'mt7621_xiaomi_nand_128m.dtsi' \
-            "custom/${DTS_NAME}"; then
-            echo "ERROR: DTS masih menggunakan basis NAND."
+          if grep -q 'mt7621_xiaomi_nand_128m.dtsi' "custom/${DTS_NAME}"; then
+            echo "ERROR: DTS masih menggunakan basis NAND." >&2
             exit 1
           fi
 
           if grep -q '&switch0' "custom/${DTS_NAME}"; then
-            echo "ERROR: Gunakan &gsw untuk fork LEDE ini, bukan &switch0."
+            echo "ERROR: Gunakan &gsw untuk fork LEDE ini, bukan &switch0." >&2
             exit 1
           fi
 
-          grep -q '&gsw' "custom/${DTS_NAME}"
-
       - name: Apply custom DTS
         run: |
+          set -euo pipefail
           cp "custom/${DTS_NAME}" \
             "${LEDE_DIR}/target/linux/ramips/dts/${DTS_NAME}"
 
       - name: Replace Xiaomi Mi Router 3G profile
         working-directory: lede
         run: |
+          set -e
           python3 <<'PY'
           from pathlib import Path
           import re
@@ -130,36 +140,35 @@ jobs:
       - name: Update feeds
         working-directory: lede
         run: |
+          set -e
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Configure target
         working-directory: lede
         run: |
+          set -e
           make defconfig
-          grep -E \
-            'CONFIG_TARGET_ramips|CONFIG_TARGET_DEVICE_ramips_mt7621|CONFIG_TARGET_ROOTFS' \
-            .config || true
+          grep -q '^CONFIG_TARGET_ramips=y' .config
+          grep -q '^CONFIG_TARGET_ramips_mt7621=y' .config
 
-      - name: Repair host tools
+      - name: Verify and repair host tools
         working-directory: lede
         run: |
-          set -eux
-          rm -rf build_dir/host/m4-* build_dir/host/flex-*
-          rm -f staging_dir/host/stamp/.m4_* staging_dir/host/stamp/.flex_*
-          rm -f staging_dir/host/bin/m4 staging_dir/host/bin/flex
+          set -euo pipefail
 
-          make tools/m4/compile tools/m4/install V=s
-          make tools/flex/compile tools/flex/install V=s
+          # Rebuild host tools in a coherent stage instead of requesting an
+          # individual tool/install target that is absent in older Makefiles.
+          make -j"$(nproc)" tools/install V=s
 
           test -x staging_dir/host/bin/m4
           test -x staging_dir/host/bin/flex
-          staging_dir/host/bin/m4 --version
-          staging_dir/host/bin/flex --version
+          staging_dir/host/bin/m4 --version >/dev/null
+          staging_dir/host/bin/flex --version >/dev/null
 
-      - name: Compile Linux target
+      - name: Compile target kernel
         working-directory: lede
-        run: make target/linux/compile V=s
+        run: make -j"$(nproc)" target/linux/compile V=s
 
       - name: Build firmware
         working-directory: lede
@@ -168,16 +177,23 @@ jobs:
       - name: Check output
         working-directory: lede
         run: |
+          set -e
           echo "=== Output files ==="
-          find bin/targets/ramips/mt7621 -maxdepth 1 -type f \
-            -printf '%f\n' | sort
+          find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f\n' | sort
           echo "=== Output sizes ==="
           du -h bin/targets/ramips/mt7621/*
+
+          test -n "$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f \
+            \( -name '*squashfs*sysupgrade*' -o -name '*squashfs*factory*' \) -print -quit)"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: lede-xiaomi-mi-router-3g-spi16m
-          path: lede/bin/targets/ramips/mt7621/*
+          path: |
+            lede/bin/targets/ramips/mt7621/*sysupgrade*.bin
+            lede/bin/targets/ramips/mt7621/*factory*.bin
+            lede/bin/targets/ramips/mt7621/config.buildinfo
+            lede/bin/targets/ramips/mt7621/sha256sums
           if-no-files-found: error
           retention-days: 14
