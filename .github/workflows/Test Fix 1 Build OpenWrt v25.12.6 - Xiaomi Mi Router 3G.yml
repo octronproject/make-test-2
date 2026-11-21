@@ -37,10 +37,9 @@ jobs:
 
       - name: Clone OpenWrt source
         run: |
-          set -euo pipefail
-          git clone --branch "$OPENWRT_TAG" --depth 1 \
-            https://github.com openwrt
-          git -C openwrt describe --tags --exact-match
+          git clone https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          git checkout v25.12.6
 
       - name: Update and install feeds
         working-directory: openwrt
