@@ -1,0 +1,108 @@
+name: Tes Fix 4 Build lede 20251001 - Xiaomi Mi Router 3G
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      LEDE_TAG: 20251001
+
+    steps:
+      - name: Checkout custom configuration
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-setuptools rsync \
+            swig unzip zlib1g-dev file wget device-tree-compiler
+
+      - name: Clone lede source
+        run: |
+          git clone https://github.com/coolsnowwolf/lede.git
+          cd lede
+          git checkout 20251001
+
+      - name: Update and install feeds
+        working-directory: lede
+        run: |
+          set -euo pipefail
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Validate and apply custom files
+        run: |
+          set -euo pipefail
+          test -s xiaomi-mir3g/.config
+          test -s xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts
+          test -s xiaomi-mir3g/mt7621.mk
+
+          # 1. Validasi keberadaan definisi device Xiaomi Mi Router 3G di mt7621.mk
+          grep -q "define Device/xiaomi_mi-router-3g" xiaomi-mir3g/mt7621.mk || {
+            echo "ERROR: Definisi Device/xiaomi_mi-router-3g tidak ditemukan di mt7621.mk!"
+            exit 1
+          }
+
+          # 2. Validasi kompatibilitas model & struktur dasar pada file DTS
+          grep -q 'compatible = "xiaomi,mi-router-3g"' xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts || {
+            echo "ERROR: String compatible xiaomi,mi-router-3g tidak ditemukan di DTS!"
+            exit 1
+          }
+          grep -q "mt7621.dtsi" xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts || {
+            echo "ERROR: Header mt7621.dtsi tidak di-include dalam DTS!"
+            exit 1
+          }
+
+          cp xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts \
+            lede/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
+          cp xiaomi-mir3g/mt7621.mk \
+            lede/target/linux/ramips/image/mt7621.mk
+
+          # Simpan daftar seluruh pilihan =y dan =m asli milik Anda sebelum defconfig
+          grep -E "^CONFIG_PACKAGE_.*=(y|m)$" xiaomi-mir3g/.config | sort > "$RUNNER_TEMP/expected_pkgs.txt"
+          cp xiaomi-mir3g/.config lede/.config
+
+      - name: Resolve and lock .config without resetting options
+        working-directory: lede
+        run: |
+          set -euo pipefail
+          make defconfig
+
+          # Pastikan target image & Makefile terbaca valid oleh build system
+          make target/linux/prereq
+
+          # Ekstrak seluruh pilihan =y dan =m setelah defconfig
+          grep -E "^CONFIG_PACKAGE_.*=(y|m)$" .config | sort > "$RUNNER_TEMP/actual_pkgs.txt"
+
+          # Pastikan 100% pilihan paket Anda tidak ada yang hilang atau berubah status
+          MISSING=$(comm -23 "$RUNNER_TEMP/expected_pkgs.txt" "$RUNNER_TEMP/actual_pkgs.txt")
+          if [ -n "$MISSING" ]; then
+            echo "ERROR! Paket berikut ter-reset atau berubah oleh make defconfig:"
+            echo "$MISSING"
+            exit 1
+          fi
+          echo "SUKSES: Seluruh pilihan paket (=y dan =m) serta file DTS/MK terverifikasi!"
+
+      - name: Download sources
+        working-directory: lede
+        run: make download -j"$(nproc)"
+
+      - name: Build firmware
+        working-directory: lede
+        run: make -j"$(nproc)" V=s
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lede-${{ env.LEDE_TAG }}-xiaomi-mir3g
+          path: lede/bin/targets/**
+          if-no-files-found: error
+          retention-days: 14
