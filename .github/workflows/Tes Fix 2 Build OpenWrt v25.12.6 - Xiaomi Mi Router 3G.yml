@@ -1,4 +1,4 @@
-name: Build OpenWrt v25.12.6 - Xiaomi Mi Router 3G
+name: Tes Fix 2 Build OpenWrt v25.12.6 - Xiaomi Mi Router 3G
 
 on:
   workflow_dispatch:
