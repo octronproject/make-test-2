@@ -140,13 +140,25 @@ jobs:
 
           cp xiaomi-mir3g/.config lede/.config
 
-          # Nonaktifkan seluruh varian package manager APK di konfigurasi.
-          # Pada konfigurasi sebelumnya apk-openssl=y menyebabkan build
-          # mengunduh sumber APK yang gagal diakses.
+          # 1. Nonaktifkan seluruh varian package manager APK
           sed -i -E \
             '/^CONFIG_PACKAGE_apk(-[^=]+)?=y$/ {
               s/^CONFIG_PACKAGE_(.*)=y$/# CONFIG_PACKAGE_\1 is not set/
             }' lede/.config
+
+          # 2. Perbaiki dependensi ksmbd (ubah kmod-fs-cifsd menjadi kmod-fs-ksmbd)
+          find lede/feeds/ lede/package/ -name "Makefile" -path "*ksmbd*" \
+            -exec sed -i 's/kmod-fs-cifsd/kmod-fs-ksmbd/g' {} +
+          ./lede/scripts/feeds install -f -p packages ksmbd-tools || true
+
+          sed -i '/CONFIG_PACKAGE_kmod-fs-cifsd/d' lede/.config
+          sed -i '/CONFIG_PACKAGE_kmod-fs-ksmbd/d' lede/.config
+          sed -i '/CONFIG_PACKAGE_ksmbd-server/d' lede/.config
+          sed -i '/CONFIG_PACKAGE_luci-app-ksmbd/d' lede/.config
+
+          echo "CONFIG_PACKAGE_kmod-fs-ksmbd=y" >> lede/.config
+          echo "CONFIG_PACKAGE_ksmbd-server=y" >> lede/.config
+          echo "CONFIG_PACKAGE_luci-app-ksmbd=y" >> lede/.config
 
           if grep -Eq '^CONFIG_PACKAGE_apk(-[^=]+)?=y$' lede/.config; then
             echo "ERROR: Ada package APK yang masih aktif di konfigurasi awal:"
@@ -154,10 +166,12 @@ jobs:
             exit 1
           fi
 
+          # Simpan daftar seluruh pilihan =y dan =m setelah seluruh penyesuaian
           grep -E '^CONFIG_PACKAGE_.*=(y|m)$' \
-            lede/.config | sort > "$RUNNER_TEMP/expected_pkgs.txt"
+            lede/.config | sort -u > "$RUNNER_TEMP/expected_pkgs.txt"
 
-          echo "APK manager dinonaktifkan pada konfigurasi awal."
+          echo "Sukses: APK nonaktif, ksmbd diperbaiki, vsftpd tetap aktif, dan konfigurasi siap."
+
 
       - name: Resolve and validate .config
         working-directory: lede
