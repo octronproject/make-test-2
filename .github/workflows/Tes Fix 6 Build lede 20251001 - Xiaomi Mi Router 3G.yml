@@ -1,0 +1,211 @@
+name: Tes Fix 6 Build lede 20251001 - Xiaomi Mi Router 3G
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+
+    defaults:
+      run:
+        shell: bash
+
+    timeout-minutes: 360
+    env:
+      LEDE_TAG: "20251001"
+      DEBIAN_FRONTEND: noninteractive
+      FORCE_UNSAFE_CONFIGURE: "1"
+
+    steps:
+      - name: Checkout custom configuration
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies and Python 2.7
+        run: |
+          set -euxo pipefail
+
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            software-properties-common \
+            gnupg
+
+          add-apt-repository -y universe
+          apt-get update
+
+          apt-get install -y --no-install-recommends \
+            bash \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            gettext \
+            git \
+            libelf-dev \
+            libncurses-dev \
+            libssl-dev \
+            libxml2-dev \
+            python2.7 \
+            python2.7-dev \
+            python3 \
+            python3-setuptools \
+            python3-pyelftools \
+            rsync \
+            subversion \
+            swig \
+            time \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            curl \
+            device-tree-compiler \
+            xz-utils \
+            tar \
+            cpio \
+            bc
+
+          # Pastikan perintah `python` dan `python2` mengarah ke Python 2.7
+          ln -sf /usr/bin/python2.7 /usr/local/bin/python
+          ln -sf /usr/bin/python2.7 /usr/local/bin/python2
+          update-alternatives --install /usr/bin/python python /usr/bin/python2.7 1 || true
+
+          python --version
+          python2 --version
+          python3 --version
+          git --version
+
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Clone LEDE source
+        run: |
+          set -euxo pipefail
+
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
+
+          rm -rf lede
+          git clone --depth 1 --branch "$LEDE_TAG" \
+            https://github.com/coolsnowwolf/lede.git lede
+          git -C lede rev-parse --short HEAD
+
+      - name: Update and install feeds
+        working-directory: lede
+        run: |
+          set -euo pipefail
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Validate and apply custom files
+        run: |
+          set -euo pipefail
+
+          test -s xiaomi-mir3g/.config
+          test -s xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts
+          test -s xiaomi-mir3g/mt7621.mk
+
+          grep -q "define Device/xiaomi_mi-router-3g" \
+            xiaomi-mir3g/mt7621.mk || {
+              echo "ERROR: Definisi Device/xiaomi_mi-router-3g tidak ditemukan di mt7621.mk."
+              exit 1
+            }
+
+          grep -q 'compatible = "xiaomi,mi-router-3g"' \
+            xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts || {
+              echo "ERROR: String compatible xiaomi,mi-router-3g tidak ditemukan di DTS."
+              exit 1
+            }
+
+          grep -q "mt7621.dtsi" \
+            xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts || {
+              echo "ERROR: Include mt7621.dtsi tidak ditemukan di DTS."
+              exit 1
+            }
+
+          cp xiaomi-mir3g/mt7621_xiaomi_mi-router-3g.dts \
+            lede/target/linux/ramips/dts/mt7621_xiaomi_mi-router-3g.dts
+          cp xiaomi-mir3g/mt7621.mk \
+            lede/target/linux/ramips/image/mt7621.mk
+
+          grep -E '^CONFIG_PACKAGE_.*=(y|m)$' \
+            xiaomi-mir3g/.config | sort > "$RUNNER_TEMP/expected_pkgs.txt"
+
+          cp xiaomi-mir3g/.config lede/.config
+
+      - name: Resolve and validate .config
+        working-directory: lede
+        run: |
+          set -euo pipefail
+
+          make defconfig
+          make target/linux/prereq
+
+          grep -E '^CONFIG_PACKAGE_.*=(y|m)$' \
+            .config | sort > "$RUNNER_TEMP/actual_pkgs.txt"
+
+          MISSING="$(comm -23 \
+            "$RUNNER_TEMP/expected_pkgs.txt" \
+            "$RUNNER_TEMP/actual_pkgs.txt")"
+
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: Pilihan paket berikut hilang atau berubah setelah make defconfig:"
+            echo "$MISSING"
+            exit 1
+          fi
+
+          echo "Sukses: pilihan paket dan file DTS/MK telah divalidasi."
+
+      - name: Set build parallelism
+        run: |
+          set -euo pipefail
+
+          CPU_JOBS="$(nproc)"
+          AVAILABLE_KB="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
+          MEMORY_JOBS="$((AVAILABLE_KB / 3000000))"
+
+          if [ "$MEMORY_JOBS" -lt 1 ]; then
+            MEMORY_JOBS=1
+          fi
+
+          if [ "$CPU_JOBS" -lt "$MEMORY_JOBS" ]; then
+            BUILD_JOBS="$CPU_JOBS"
+          else
+            BUILD_JOBS="$MEMORY_JOBS"
+          fi
+
+          echo "BUILD_JOBS=$BUILD_JOBS" >> "$GITHUB_ENV"
+          echo "Menggunakan $BUILD_JOBS job paralel."
+
+      - name: Download sources
+        working-directory: lede
+        run: |
+          set -euo pipefail
+          make download -j"$BUILD_JOBS"
+
+      - name: Build firmware
+        working-directory: lede
+        env:
+          PYTHON: /usr/bin/python2.7
+        run: |
+          set -euo pipefail
+          python --version
+          make -j"$BUILD_JOBS" V=s || make -j1 V=s
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lede-${{ env.LEDE_TAG }}-xiaomi-mir3g
+          path: lede/bin/targets/**
+          if-no-files-found: error
+          retention-days: 14
